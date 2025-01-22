@@ -1,5 +1,6 @@
-package com.mcmc
+package com.mcmc.com.mcmc
 
+import com.mcmc.Service
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
