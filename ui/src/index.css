@@ -94,3 +94,13 @@ body { display: block; }
 
 .cell-id { max-width: 36ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* array-as-dropdown inside a cell */
+.cell-select-td { max-width: 360px; }
+.cell-select {
+    width: 100%;
+    max-width: 100%;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}

@@ -39,25 +39,23 @@ fun StreetPatch.toEntity(): Street = Street(
   altitude = altitude ?: 0.0
 )
 
-suspend fun Street.apply(p: StreetPatch) {
-  val updated = copy(
-    routeNumber = p.routeNumber ?: routeNumber,
-    town = p.town ?: town,
-    county = p.county ?: county,
-    state = p.state ?: state,
-    surface = p.surface ?: surface,
-    condition = p.condition ?: condition,
-    width = p.width ?: width,
-    lanes = p.lanes ?: lanes,
-    latitude = p.latitude ?: latitude,
-    longitude = p.longitude ?: longitude,
-    altitude = p.altitude ?: altitude,
+fun Street.toView(): StreetView =
+  StreetView(
+    id = id,
+    name = name,
+    zip = zip,
+    roadType = roadType,
+    routeNumber = routeNumber,
+    town = town,
+    county = county,
+    state = state,
+    surface = surface,
+    condition = condition,
+    width = width,
+    lanes = lanes,
+    latitude = latitude,
+    longitude = longitude,
+    altitude = altitude,
+    timestamp = timestamp,
+    segments = segments.toSegmentView()
   )
-  updateStreet(updated)
-}
-
-fun Street.toView() = StreetView(
-  id, name, roadType, routeNumber, town, county, state, zip,
-  surface, condition, width, lanes,
-  latitude, longitude, altitude, timestamp
-)

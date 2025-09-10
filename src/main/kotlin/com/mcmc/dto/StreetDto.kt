@@ -41,7 +41,7 @@ data class StreetPatch(
 
 @Serializable
 data class StreetSegmentView(
-  val key: Double,
+  val location: Double,
   val surface: Surface,
   val condition: Condition,
   val width: Width,

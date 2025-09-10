@@ -285,30 +285,63 @@ function deref(s: any, spec: any): any {
     return s;
 }
 
-// function formatCell(v: any) {
-//     if (v == null) return '';
-//     if (Array.isArray(v)) return v.join(', ');
-//     if (typeof v === 'object') return JSON.stringify(v);
-//     return String(v);
-// }
+function looksLikeJson(s: string) {
+    const t = s.trim();
+    return (t.startsWith('[') && t.endsWith(']')) || (t.startsWith('{') && t.endsWith('}'));
+}
 
-/** Build simple columns from object schema (primitive props only, `id` first). */
-/** Build columns from object schema; keep coords/time last; special-case segments. */
+function toArray(val: any): any[] {
+    if (val == null) return [];
+    if (Array.isArray(val)) return val;
+    if (typeof val === 'string' && looksLikeJson(val)) {
+        try {
+            const parsed = JSON.parse(val);
+            if (Array.isArray(parsed)) return parsed;
+            if (parsed && typeof parsed === 'object') return [parsed];
+        } catch {/* ignore */}
+    }
+    if (typeof val === 'object') return [val];
+    return [val];
+}
+
+function segmentLabel(seg: any) {
+    if (!seg || typeof seg !== 'object') return String(seg ?? '');
+    const parts: string[] = [];
+    if (seg.location != null) parts.push(String(seg.location));
+    if (seg.surface)         parts.push(String(seg.surface));
+    if (seg.condition)       parts.push(String(seg.condition));
+    if (seg.width != null)   parts.push(`w=${seg.width}`);
+    if (seg.lanes != null)   parts.push(`lanes=${seg.lanes}`);
+    return parts.join(' · ');
+}
+
+function genericItemLabel(item: any) {
+    return typeof item === 'object' ? JSON.stringify(item) : String(item);
+}
+
+function formatCell(v: any) {
+    if (v == null) return '';
+    if (Array.isArray(v)) return v.join(', ');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+}
+
+/** Build columns from object schema; force coords/time last; arrays as dropdowns. */
 function inferColumnsFromSchema(
     rowSchema: any,
     opts?: { max?: number; showCoords?: boolean }
 ): Column[] {
     const props: Record<string, any> = rowSchema?.properties ?? {};
     const keys = Object.keys(props);
-    const maxCols = opts?.max ?? Infinity; // allow overflow → horizontal scroll
+    const maxCols = opts?.max ?? Infinity;
 
-    const isIdLike   = (k: string) => /(^|_)id$/i.test(k);
-    const isPrimaryId= (k: string) => k.toLowerCase() === 'id';
-    const isName     = (k: string) => /(^|_)name$/i.test(k);
-    const isZip      = (k: string) => /(zip|code)$/i.test(k);
-    const isType     = (k: string) => /(roadType|signType|intersectionType|type)$/i.test(k);
-    const isCoord    = (k: string) => /^(lat|latitude|lon|lng|longitude|altitude)$/i.test(k);
-    const isTimeLike = (k: string) => /(timestamp|created|updated|.*At|time)$/i.test(k);
+    const isIdLike    = (k: string) => /(^|_)id$/i.test(k);
+    const isPrimaryId = (k: string) => k.toLowerCase() === 'id';
+    const isName      = (k: string) => /(^|_)name$/i.test(k);
+    const isZip       = (k: string) => /(zip|code)$/i.test(k);
+    const isType      = (k: string) => /(roadType|signType|intersectionType|type)$/i.test(k);
+    const isCoord     = (k: string) => /^(lat|latitude|lon|lng|longitude|altitude)$/i.test(k);
+    const isTimeLike  = (k: string) => /(timestamp|created|updated|.*At|time)$/i.test(k);
 
     // smaller rank = earlier column
     const rank = (k: string) =>
@@ -320,61 +353,91 @@ function inferColumnsFromSchema(
                             : isTimeLike(k)  ? 98
                                 : isCoord(k)     ? 99
                                     : 50;
-
-    const isPrimitive = (t?: string) =>
-        !t || ['string','number','integer','boolean'].includes(t);
-
-    // Hide coords only if explicitly requested; otherwise include them (rank pushes to end).
     const selectedKeys = keys
         .filter(k => {
             const t = props[k]?.type;
             if (t === 'object') return false;
-            if (t === 'array' && k !== 'segments') return true; // arrays allowed; special-case next
-            if (!opts?.showCoords && isCoord(k)) return false;
-            return isPrimitive(t) || k === 'segments';
+            if (!opts?.showCoords && isCoord(k)) return false; // hide coords unless requested
+            return true;
         })
         .sort((a, b) => {
             const da = rank(a), db = rank(b);
-            return da !== db ? da - db : a.localeCompare(b); // stable-ish
+            return da !== db ? da - db : a.localeCompare(b);
         })
         .slice(0, maxCols);
 
     return selectedKeys.map<Column>(k => {
-        // segments → count, and force a nice header
+        const header = k;                     // <-- use the field name only
+        const idCell = /(^|_)id$/i.test(k);
+
+        // Nice labels for "segments"
         if (k === 'segments') {
             return {
-                header: 'Segments',
-                tdClassName: undefined,
-                render: (r: any) => Array.isArray(r?.segments) ? r.segments.length : 0,
+                header,
+                tdClassName: 'cell-list',
+                title: (r) => {
+                    const arr = toArray(r?.segments);
+                    return arr.length ? `${arr.length} segment(s)` : '0 segment(s)';
+                },
+                render: (r) => {
+                    const arr = toArray(r?.segments);
+                    if (!arr.length) return <span style={{ opacity: 0.7 }}>0</span>;
+                    return (
+                        <select
+                            className="cell-select"
+                            // NOTE: not disabled ⇒ you can open it
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title={`${arr.length} segment(s)`}
+                        >
+                            {arr.map((seg, i) => (
+                                <option key={i} value={String(i)}>
+                                    {segmentLabel(seg)}
+                                </option>
+                            ))}
+                        </select>
+                    );
+                },
             };
         }
 
-        const schema = props[k];
-        const header =
-            typeof schema?.title === 'string' && schema.title.trim() && !/^(string|number|integer|boolean|object|array|int|long|double)$/i.test(schema.title)
-                ? schema.title
-                : k;
-
-        const idCell = isPrimaryId(k) || (isIdLike(k) && !/streetId/i.test(k)); // make ids ellipsize
+        // Generic: arrays -> dropdown (openable), primitives -> text
         return {
             header,
-            tdClassName: idCell ? 'cell-id' : (schema?.type === 'array' ? 'cell-list-td' : undefined),
-            title: idCell ? (r) => (r?.[k] != null ? String(r[k]) : undefined) : undefined,
-            render: (r: any) => {
-                const v = r?.[k];
-                if (v == null) return '';
-                if (Array.isArray(v)) {
-                    // compact list inside cell (works with your CSS if present)
+            tdClassName: 'cell-list',
+            title: (r) => {
+                const arr = toArray(r?.[k]);
+                return arr.length ? `${arr.length} item(s)` : undefined;
+            },
+            render: (r) => {
+                const raw = r?.[k];
+                const arr = toArray(raw);
+
+                if (arr.length > 1) {
                     return (
-                        <div className="cell-list" title={`${v.length} item(s)`}>
-                            {v.map((it, i) => (
-                                <div key={i}>{typeof it === 'object' ? JSON.stringify(it) : String(it)}</div>
+                        <select
+                            className="cell-select"
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            title={`${arr.length} item(s)`}
+                        >
+                            {arr.map((it, i) => (
+                                <option key={i} value={String(i)}>
+                                    {k === 'segments' ? segmentLabel(it) : genericItemLabel(it)}
+                                </option>
                             ))}
-                        </div>
+                        </select>
                     );
                 }
-                if (typeof v === 'object') return JSON.stringify(v);
-                return String(v);
+
+                return (
+                    <span
+                        className={idCell ? 'cell-id' : undefined}
+                        title={idCell && raw != null ? String(raw) : undefined}
+                    >
+          {formatCell(raw)}
+        </span>
+                );
             },
         };
     });
