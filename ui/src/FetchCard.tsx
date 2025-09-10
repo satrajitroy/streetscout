@@ -190,7 +190,7 @@ export default function FetchCard({
 
             {err && <div style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{err}</div>}
 
-            <div style={{ overflowX: "auto", marginTop: 8 }}>
+            <div className="table-scroll" style={{ marginTop: 8 }}>
                 <table
                     style={{
                         borderCollapse: "collapse",

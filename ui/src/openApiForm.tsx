@@ -45,6 +45,18 @@ function pickJson(content?: Record<string, any>) {
     return jsonKey ? content[jsonKey]?.schema : undefined;
 }
 
+import type { ObjectFieldTemplateProps } from '@rjsf/utils';
+
+const NoFieldsetObjectTemplate = (props: ObjectFieldTemplateProps) => (
+    <div className="rjsf-object">
+        {props.title && <div style={{ display: 'none' }}>{props.title}</div>}
+        {props.description}
+        {props.properties.map((p) => (
+            <div key={p.name} className="rjsf-field">{p.content}</div>
+        ))}
+    </div>
+);
+
 const OpenApiForm = React.forwardRef<OpenApiFormHandle, Props>(function OpenApiForm(
     {path, method, uiSchema, initialData, onSuccess}: Props,
     ref
@@ -241,6 +253,7 @@ const OpenApiForm = React.forwardRef<OpenApiFormHandle, Props>(function OpenApiF
                 </button>
             ) : (
                 <Form
+                    templates={{ ObjectFieldTemplate: NoFieldsetObjectTemplate }}
                     schema={schema}
                     uiSchema={uiSchema}
                     formData={bodyData}
@@ -257,15 +270,17 @@ const OpenApiForm = React.forwardRef<OpenApiFormHandle, Props>(function OpenApiF
             )}
 
             {lastResult !== undefined && (
-                <div style={{display: "grid", gap: 8}}>
-                    <div style={{fontSize: 12, opacity: 0.7}}>
-                        Response{lastContentType ? ` · ${lastContentType}` : ""}
+                <div className="result">
+                    <div style={{display: "grid", gap: 8}}>
+                        <div style={{fontSize: 12, opacity: 0.7}}>
+                            Response{lastContentType ? ` · ${lastContentType}` : ""}
+                        </div>
+                        <pre style={{background: '#f6f8fa', padding: 8, borderRadius: 6, overflow: 'auto'}}>
+                          {typeof lastResult === 'string'
+                              ? lastResult
+                              : JSON.stringify(lastResult, null, 2)}
+                        </pre>
                     </div>
-                    <pre style={{background: '#f6f8fa', padding: 8, borderRadius: 6, overflow: 'auto'}}>
-                      {typeof lastResult === 'string'
-                          ? lastResult
-                          : JSON.stringify(lastResult, null, 2)}
-                    </pre>
                 </div>
             )}
         </div>

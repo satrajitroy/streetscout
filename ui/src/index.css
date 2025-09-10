@@ -1,60 +1,43 @@
 html, body, #root { height: 100%; }
 
-.row3 {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-    align-items: start;
-}
-
-.rowFetch3 {
-    display: grid;
-    gap: 16px;
-    grid-template-columns: 2fr 1fr 1fr;
-    align-items: start;
-}
-@media (max-width: 1100px) {
-    .rowFetch3 { grid-template-columns: 1fr; }
-}
+/*@media (max-width: 1100px) {*/
+/*    .rowFetch3 { grid-template-columns: 1fr; }*/
+/*}*/
 
 #root { width: 100%; max-width: none; margin: 0; padding: 16px; }
 
 body { display: block; }
 
-/* Make sure the card can shrink */
-.card { min-width: 0; }
-
-/* Use the card as the only frame */
-.card form fieldset {
-    border: 3px !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    min-width: 0 !important;
-    width: 100% !important;
-    box-sizing: border-box !important;
-}
-
-.card form legend {
-    display: none !important;
-}
-
-.card form fieldset fieldset {
-    border: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-
-/* Inputs should not overflow */
-.card input, .card select, .card textarea {
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-}
-
 /* Horizontal scroll for wide tables */
 .op-scroll {
     overflow-x: auto;
 }
+
+.card { overflow: hidden; }
+
+/* RJSF: no fieldset/legend box (you already did this) */
+.rjsf-plain fieldset { border: 0 !important; margin: 0 !important; padding: 0 !important; }
+.rjsf-plain legend   { display: none !important; }
+
+/* Compact spacing inside the form */
+.rjsf-plain .form-group,
+.rjsf-plain .field,
+.rjsf-plain .field-object,
+.rjsf-plain .field-array {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Tighten labels/inputs a bit */
+.rjsf-plain label { margin: 2px 0 2px; font-size: 12px; opacity: 0.9; }
+.rjsf-plain input,
+.rjsf-plain select,
+.rjsf-plain textarea { height: 28px; padding: 4px 6px; }
+
+/* Cards themselves shouldn’t force height */
+.card { padding: 10px; overflow: hidden; }
+.card > :first-child { margin-top: 0; }
+.card > :last-child  { margin-bottom: 0; }
 
 /* Let the table be wider than its container if needed */
 .op-table {
@@ -103,4 +86,75 @@ body { display: block; }
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
+}
+
+/* Row container: flex so cards size by content; wraps on small screens */
+.row3 {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+/* Card look */
+.card {
+    background: #1e1f22;                 /* slightly lighter than black */
+    border: 1px solid #2c2f36;
+    border-radius: 10px;
+    padding: 12px;
+    color: #e8e8ea;                       /* default text color */
+}
+
+/* Headings / labels legibility */
+.card > div:first-child {               /* the card title in your component */
+    color: #f2f2f5;
+    font-weight: 600;
+}
+.card label, .card legend, .card .field-title {
+    color: #dedee3;                       /* RJSF labels/legends */
+    opacity: 1;
+}
+
+/* Fetch (table) card: take the leftover space */
+.card--table {
+    min-width: 560px;                     /* keep columns usable */
+    flex: 1 1 900px;                      /* grows to fill remaining width */
+}
+/* Keep the table’s horizontal scrollbar */
+.card--table .table-scroll { overflow-x: auto; }
+
+/* Create/Edit forms: keep them compact */
+.card--form {
+    width: 360px;                         /* “shrink-wrapped” form width */
+    flex: 0 0 360px;                      /* don’t grow */
+}
+
+/* Optional: make Fetch span full width on smaller screens */
+@media (max-width: 1100px) {
+    .card--table { flex-basis: 100%; min-width: 0; }
+}
+
+/* Response block inside cards */
+.card .result {
+    margin-top: 8px;
+    background: #f6f8fa;           /* light bg for contrast */
+    color: #111;                    /* force dark text (was inheriting light) */
+    border: 1px solid #d0d7de;
+    border-radius: 8px;
+    padding: 6px 8px;
+}
+
+.card .result pre {
+    margin: 0;
+    white-space: pre-wrap;          /* wrap long lines nicely */
+    word-break: break-word;
+    max-height: 140px;              /* keep it compact */
+    overflow: auto;                 /* scroll if long */
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+.card .result .meta {
+    font-size: 12px;
+    opacity: .75;
+    margin-bottom: 4px;
 }
