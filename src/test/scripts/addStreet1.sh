@@ -1,6 +1,6 @@
 #!/bin/bash
 
-curl --location 'http://localhost:8080/api/streetscout/street/submit' \
+curl --location 'http://localhost:8082/api/streetscout/street/submit' \
 --header 'Content-Type: application/json' \
 --data '{
     "type": "Street",

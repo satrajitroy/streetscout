@@ -1,0 +1,96 @@
+html, body, #root { height: 100%; }
+
+.row3 {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    align-items: start;
+}
+
+.rowFetch3 {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: 2fr 1fr 1fr;
+    align-items: start;
+}
+@media (max-width: 1100px) {
+    .rowFetch3 { grid-template-columns: 1fr; }
+}
+
+#root { width: 100%; max-width: none; margin: 0; padding: 16px; }
+
+body { display: block; }
+
+/* Make sure the card can shrink */
+.card { min-width: 0; }
+
+/* Use the card as the only frame */
+.card form fieldset {
+    border: 3px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+.card form legend {
+    display: none !important;
+}
+
+.card form fieldset fieldset {
+    border: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Inputs should not overflow */
+.card input, .card select, .card textarea {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+/* Horizontal scroll for wide tables */
+.op-scroll {
+    overflow-x: auto;
+}
+
+/* Let the table be wider than its container if needed */
+.op-table {
+    border-collapse: collapse;
+    width: max-content;   /* grows to fit columns */
+    min-width: 100%;      /* but never smaller than the viewport */
+    table-layout: auto;   /* allow natural column widths */
+}
+
+.op-table th, .op-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #333;
+    text-align: left;
+    white-space: nowrap;  /* keep cells to one line; we scroll instead */
+}
+
+/* Single-line, ellipsized IDs */
+.op-table td.cell-id {
+    max-width: 36ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Scrollable list inside a cell for arrays */
+.cell-list {
+    max-height: 8rem;         /* ~8 rows; tweak */
+    overflow: auto;
+    white-space: normal;      /* allow wrapping inside list items */
+    padding: 2px 0;
+}
+
+.cell-list > div {
+    margin: 0;
+    line-height: 1.25;
+}
+
+.cell-id { max-width: 36ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
