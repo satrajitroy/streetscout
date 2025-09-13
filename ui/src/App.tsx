@@ -2,9 +2,36 @@
 import * as React from "react";
 import OpenApiForm from "./openApiForm";
 import FetchCard from "./FetchCard";
-import { discoverResources, type ResourceDef, type UiOverrides } from "./discover";
+import { discoverResources } from "./discover";
 
-const BASE_API_PREFIX = "/api/streetscout"; // change if your base changes
+const BASE_API_PREFIX = import.meta.env.VITE_API_URL || ""; // change if your base changes
+const DISCOVERY_PREFIX = (import.meta as any).env?.VITE_DISCOVERY_PREFIX ?? "";
+console.debug("DISCOVERY_PREFIX =", DISCOVERY_PREFIX);
+
+
+// ---- Types you want to import elsewhere ----
+type Paths = {
+    listPath?: string;
+    idPath?: string;
+    submitPath?: string;  // POST create
+    editPath?: string;    // PUT/PATCH update
+    deletePath?: string;
+};
+
+type ResourceDef = {
+    name: string;
+    title: string;
+    paths: Paths;
+    ops?: {
+        list?: any;
+        getById?: any;
+        create?: any;
+        edit?: any;
+        delete?: any;
+    };
+};
+
+type UiOverrides = Record<string, { create?: any; edit?: any }>;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
     return (
@@ -69,6 +96,7 @@ function ResourceSection({ r }: { r: ResourceDef }) {
                             idPath={r.paths.idPath ?? `${BASE_API_PREFIX}/${r.name}/{id}`}
                             idMethod="get"
                             listPath={r.paths.listPath ?? `${BASE_API_PREFIX}/${r.name}`}
+                            listOp={r.ops?.list}
                             deletePath={r.paths.deletePath}
                             onPick={(row) => {
                                 // Prefill Edit: set {id} param and body
@@ -123,7 +151,7 @@ export default function App() {
         (async () => {
             try {
                 setErr("");
-                const res = await discoverResources(BASE_API_PREFIX);
+                const res = await discoverResources(DISCOVERY_PREFIX);
                 if (!cancelled) setResources(res);
             } catch (e: any) {
                 if (!cancelled) setErr(e.message || String(e));

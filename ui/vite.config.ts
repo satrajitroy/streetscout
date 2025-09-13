@@ -9,7 +9,6 @@ export default defineConfig({
         port: 5173,
         proxy: {
             '/api': {target: 'http://localhost:8082', changeOrigin: true},
-            // if you fetch `/api.json` without BASE, also proxy it:
             '/api.json': {target: 'http://localhost:8082', changeOrigin: true},
         },
     },

@@ -2,6 +2,7 @@
 import * as React from "react";
 import { getSpec, getResponseSchema } from "./openapi";
 import type { HttpMethod } from "./openapi";
+import { useFilters } from "./hooks/useFilters";
 
 // type Page<T> = { items: T[]; page: number; size: number; total: number };
 type Column = {
@@ -23,6 +24,7 @@ type Props = {
 
     /** e.g. "/api/streetscout/street" (must support ?page=&size=) */
     listPath: string;
+    listOp?: any; // OpenAPI op for GET list
 
     /** e.g. "/api/streetscout/street/delete/{id}" */
     deletePath?: string;
@@ -42,6 +44,7 @@ export default function FetchCard({
                                       idPath,
                                       idMethod = "get",
                                       listPath,
+                                      listOp,
                                       deletePath,
                                       columns,
                                       pageSize = 8,
@@ -57,6 +60,8 @@ export default function FetchCard({
     const [autoCols, setAutoCols] = React.useState<Column[] | null>(null);
 
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+    const { controls, appendTo, reset, hasFilters } = useFilters(listOp);
 
     // -------- infer columns from OpenAPI (GET-by-id) --------
     React.useEffect(() => {
@@ -102,10 +107,16 @@ export default function FetchCard({
     // -------- data fetching --------
     const fetchList = React.useCallback(async (p: number) => {
         setLoading(true); setErr("");
+        const qs = new URLSearchParams();
+
+        // If your backend is 0-based (Spring Pageable): use p-1. If it's 1-based already, keep p.
+        qs.set("page", String(Math.max(0, p)));
+        qs.set("size", String(pageSize));
+
+        appendTo(qs); // ← add active filters from the OpenAPI params
+        const url = `${BASE}${listPath}?${qs.toString()}`
         try {
-            const res = await fetch(`${BASE}${listPath}?page=${p}&size=${pageSize}`, {
-                headers: { Accept: "application/json" },
-            });
+            const res = await fetch(url, { headers: { Accept: "application/json" } });
             if (!res.ok) throw new Error(await res.text());
             const json = await res.json();
             const items = Array.isArray(json) ? json : (json.items ?? []);
@@ -117,7 +128,7 @@ export default function FetchCard({
             setErr(e.message || String(e));
             setRows([]); setTotal(0);
         } finally { setLoading(false); }
-    }, [listPath, pageSize]);
+    }, [listPath, pageSize, appendTo]);
 
     const fetchOne = React.useCallback(async (theId: string) => {
         setLoading(true); setErr("");
@@ -233,6 +244,16 @@ export default function FetchCard({
                     </tbody>
                 </table>
             </div>
+
+            {hasFilters && (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                    {controls}
+                    <button type="button" onClick={() => fetchList(1)}>Apply</button>
+                    <button type="button" onClick={() => { reset(); fetchList(1); }} style={{ opacity: .85 }}>
+                        Reset
+                    </button>
+                </div>
+            )}
 
             {id.trim() === "" && total > pageSize && (
                 <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
