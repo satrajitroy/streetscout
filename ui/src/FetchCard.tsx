@@ -56,11 +56,8 @@ export default function FetchCard({
     const [total, setTotal] = React.useState<number>(0);
     const [loading, setLoading] = React.useState(false);
     const [err, setErr] = React.useState<string>("");
-
+    const [serverSize, setServerSize] = React.useState<number | undefined>(undefined);
     const [autoCols, setAutoCols] = React.useState<Column[] | null>(null);
-
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
     const { controls, appendTo, reset, hasFilters } = useFilters(listOp);
 
     // -------- infer columns from OpenAPI (GET-by-id) --------
@@ -120,9 +117,13 @@ export default function FetchCard({
             if (!res.ok) throw new Error(await res.text());
             const json = await res.json();
             const items = Array.isArray(json) ? json : (json.items ?? []);
-            const tot = Array.isArray(json) ? items.length : (json.total ?? items.length);
+
+            const totRaw = Array.isArray(json) ? items.length : json.total;
+            const sizeRaw = Array.isArray(json) ? pageSize : json.size;
+
             setRows(items);
-            setTotal(tot);
+            setTotal(typeof totRaw === "number" ? totRaw : items.length);
+            setServerSize(typeof sizeRaw === "number" ? sizeRaw : undefined);
             setPage(p);
         } catch (e: any) {
             setErr(e.message || String(e));
@@ -187,6 +188,11 @@ export default function FetchCard({
         ];
     }, [baseCols, deletePath, onPick, doDelete]);
 
+    const effSize = serverSize ?? pageSize;                  // prefer server's size if it echoes one
+    const totalPages = Math.max(1, Math.ceil(total / effSize));
+    const isListMode = !id || id.trim() === "";              // robust empty-id check
+    const showPager = isListMode && totalPages > 1;
+
     return (
         <div className="card">
             <div style={{ fontWeight: 600, opacity: 0.9 }}>{title}</div>
@@ -248,23 +254,23 @@ export default function FetchCard({
             {hasFilters && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
                     {controls}
-                    <button type="button" onClick={() => fetchList(1)}>Apply</button>
-                    <button type="button" onClick={() => { reset(); fetchList(1); }} style={{ opacity: .85 }}>
+                    <button type="button" onClick={() => setPage(0)}>Apply</button>
+                    <button type="button" onClick={() => { reset(); setPage(0); }} style={{ opacity: .85 }}>
                         Reset
                     </button>
                 </div>
             )}
 
-            {id.trim() === "" && total > pageSize && (
+            {showPager && (
                 <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", marginTop: 8 }}>
                     <div style={{ fontSize: 12, opacity: 0.8 }}>
-                        Page {page} / {Math.max(1, Math.ceil(total / pageSize))} · Total {total}
+                        Page {page} / {totalPages} · Total {total}
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
-                        <button onClick={() => fetchList(1)} disabled={page <= 1}>Top</button>
-                        <button onClick={() => fetchList(Math.max(1, page - 1))} disabled={page <= 1}>Prev</button>
-                        <button onClick={() => fetchList(page + 1)} disabled={page >= totalPages}>Next</button>
-                        <button onClick={() => fetchList(totalPages)} disabled={page >= totalPages}>Bottom</button>
+                        <button type="button" onClick={() => fetchList(0)} disabled={page <= 0}>Top</button>
+                        <button type="button" onClick={() => fetchList(Math.max(0, page - 1))} disabled={page <= 0}>Prev</button>
+                        <button type="button" onClick={() => fetchList(page + 1)} disabled={page >= totalPages}>Next</button>
+                        <button type="button" onClick={() => fetchList(totalPages)} disabled={page >= totalPages}>Bottom</button>
                     </div>
                 </div>
             )}

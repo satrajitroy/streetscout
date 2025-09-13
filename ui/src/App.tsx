@@ -6,7 +6,7 @@ import { discoverResources } from "./discover";
 
 const BASE_API_PREFIX = import.meta.env.VITE_API_URL || ""; // change if your base changes
 const DISCOVERY_PREFIX = (import.meta as any).env?.VITE_DISCOVERY_PREFIX ?? "";
-console.debug("DISCOVERY_PREFIX =", DISCOVERY_PREFIX);
+console.log("DISCOVERY_PREFIX =", DISCOVERY_PREFIX);
 
 
 // ---- Types you want to import elsewhere ----
@@ -151,14 +151,51 @@ export default function App() {
         (async () => {
             try {
                 setErr("");
-                const res = await discoverResources(DISCOVERY_PREFIX);
-                if (!cancelled) setResources(res);
+
+                // Run your existing discovery (pass the prefix if your helper accepts it)
+                const raw = await discoverResources(DISCOVERY_PREFIX);
+                console.table(raw.map(r => ({
+                    name: r.name,
+                    list: r.paths.listPath,
+                    id: r.paths.idPath,
+                    create: r.paths.submitPath,
+                    edit: r.paths.editPath,
+                    del: r.paths.deletePath
+                })));
+
+                // Gate 1: keep only resources whose discovered paths live under the prefix
+                const prefix = DISCOVERY_PREFIX.replace(/\/+$/, ""); // trim trailing /
+                const keepByPrefix = (r: any) => {
+                    if (!prefix) return true; // allow all when empty (e.g., Spring)
+                    const paths = Object.values(r?.paths || {}) as (string | undefined)[];
+                    return paths.some(
+                        (p) => typeof p === "string" && (p === prefix || p.startsWith(prefix + "/"))
+                    );
+                };
+
+                // Gate 2: keep only resources whose list/get-by-id returns JSON
+                const hasJson = (r: any) => {
+                    const c =
+                        r?.ops?.list?.responses?.["200"]?.content ??
+                        r?.ops?.list?.responses?.["201"]?.content ??
+                        r?.ops?.getById?.responses?.["200"]?.content ??
+                        r?.ops?.getById?.responses?.["201"]?.content;
+                    return !!(c?.["application/json"] || c?.["*/*"]);
+                };
+
+                // Optional: drop obvious junk names
+                const notJunkName = (r: any) => !/^(assets?|favicon\.ico|root)$/i.test(r?.name ?? "");
+
+                const filtered = raw.filter(keepByPrefix).filter(hasJson).filter(notJunkName);
+
+                if (!cancelled) setResources(filtered);
+                console.log("resources:", filtered.map((r: any) => r.name));
             } catch (e: any) {
                 if (!cancelled) setErr(e.message || String(e));
             }
         })();
         return () => { cancelled = true; };
-    }, []);
+    }, [DISCOVERY_PREFIX]);
 
     if (err) return <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{err}</pre>;
     if (!resources) return <p>Loading…</p>;
