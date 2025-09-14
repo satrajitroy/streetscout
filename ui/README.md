@@ -72,3 +72,22 @@ export default tseslint.config([
   },
 ])
 ```
+
+## Architecture Overview
+
+This UI is spec-driven: we discover CRUD resources from the OpenAPI document and render lists/forms automatically.
+
+**Boot → Discover → Render → Mutate → Reconcile**
+- **Boot:** fetch OpenAPI once (`/api.json`) at app start.
+- **Discover:** `discoverResources(spec)` → `{ name, paths, ops }[]` (pure).
+- **Render:** one `<ResourceSection>` per resource → `<FetchCard>` (list) + `<OpenApiForm>` (create/edit).
+- **Mutate:** submit (POST/PUT/PATCH/DELETE) → refresh the affected list(s).
+- **Reconcile:** rows keyed by `id`; edit form keyed by `picked?.id` → minimal DOM updates.
+
+**Key conventions**
+- **No spec refetch** on submit (spec fetched once per URL).
+- **Stable identities:** memoized filters/handlers; `key={row.id}` for rows; `key={picked?.id ?? 'new'}` for form.
+- **Move detection:** if a filter key (e.g., `streetId`) changes on save, clear selection and refresh lists.
+
+**Docs**
+- A full tree of the flow (React/Vue/Angular side-by-side): see [`/ui/docs/ui_flow_tree_multi_framework.pdf`](./docs/ui_flow_tree_multi_framework.pdf).
