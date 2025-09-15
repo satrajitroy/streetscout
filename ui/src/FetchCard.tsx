@@ -138,10 +138,12 @@ export default function FetchCard({
             const res = await fetch(url, { headers: { Accept: "application/json" } });
             if (!res.ok) throw new Error(await res.text());
             const json = await res.json();
-            setRows([json]); setTotal(1); setPage(1);
+            setRows([json]);
+            setTotal(1);
         } catch (e: any) {
             setErr(e.message || String(e));
-            setRows([]); setTotal(0);
+            setRows([]);
+            setTotal(0);
         } finally { setLoading(false); }
     }, [idPath]);
 
@@ -207,13 +209,13 @@ export default function FetchCard({
 
             {err && <div style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{err}</div>}
 
-            <div className="table-scroll" style={{ marginTop: 8 }}>
+            <div className="table-wrap" style={{ marginTop: 8, maxWidth: '80vw', overflowX: 'auto' }}>
                 <table
                     style={{
                         borderCollapse: "collapse",
-                        width: "max-content", // <— allow table to grow as wide as needed
-                        minWidth: "100%",     // <— but never smaller than the container
-                        tableLayout: "auto",
+                        width: "max-content",
+                        minWidth: "100%",
+                        tableLayout: "fixed",
                     }}
                 >
                     <thead>
@@ -225,7 +227,10 @@ export default function FetchCard({
                                     textAlign: "left",
                                     padding: "6px 8px",
                                     borderBottom: "1px solid #333",
-                                    whiteSpace: "nowrap",              // <—
+                                    whiteSpace: "nowrap",
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    maxWidth: "24ch"
                                 }}
                             >
                                 {c.header}
@@ -254,8 +259,8 @@ export default function FetchCard({
             {hasFilters && (
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
                     {controls}
-                    <button type="button" onClick={() => setPage(0)}>Apply</button>
-                    <button type="button" onClick={() => { reset(); setPage(0); }} style={{ opacity: .85 }}>
+                    <button type="button" onClick={() => fetchList(0)}>Apply</button>
+                    <button type="button" onClick={() => { reset(); fetchList(0); }} style={{ opacity: .85 }}>
                         Reset
                     </button>
                 </div>

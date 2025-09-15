@@ -158,3 +158,9 @@ body { display: block; }
     opacity: .75;
     margin-bottom: 4px;
 }
+
+.table-wrap {
+    max-width: 80vw;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
