@@ -1,10 +1,8 @@
-// src/FetchCard.tsx
 import * as React from "react";
 import { getSpec, getResponseSchema } from "./openapi";
 import type { HttpMethod } from "./openapi";
 import { useFilters } from "./hooks/useFilters";
 
-// type Page<T> = { items: T[]; page: number; size: number; total: number };
 type Column = {
     header: string;
     render: (row: any) => React.ReactNode;
@@ -50,7 +48,7 @@ export default function FetchCard({
                                       pageSize = 8,
                                       onPick,
                                   }: Props) {
-    const [id, setId] = React.useState("");
+    const [idInput, setIdInput] = React.useState("");
     const [page, setPage] = React.useState(1);
     const [rows, setRows] = React.useState<any[]>([]);
     const [total, setTotal] = React.useState<number>(0);
@@ -58,66 +56,77 @@ export default function FetchCard({
     const [err, setErr] = React.useState<string>("");
     const [serverSize, setServerSize] = React.useState<number | undefined>(undefined);
     const [autoCols, setAutoCols] = React.useState<Column[] | null>(null);
+
+    // inferred pk used everywhere
+    const [primaryKey, setPrimaryKey] = React.useState<string>("id");
+
     const { controls, appendTo, reset, hasFilters } = useFilters(listOp);
 
-    // -------- infer columns from OpenAPI (GET-by-id) --------
+    // ---- infer columns + pk from OpenAPI (id GET) ----
     React.useEffect(() => {
         let cancelled = false;
         (async () => {
-            if (columns && columns.length) { setAutoCols(null); return; }
             try {
                 const spec = await getSpec();
 
-                // Find the documented key that matches idPath (template keys may differ in doc)
+                // find the path key in the doc that matches idPath (templated)
                 const paths = spec.paths || {};
                 let docKey: string | undefined;
                 if (paths[idPath]?.[idMethod]) docKey = idPath;
                 if (!docKey) {
-                    // try to find a template path that matches
                     for (const k of Object.keys(paths)) {
                         const rx = new RegExp("^" + k.replace(/\{[^}]+\}/g, "[^/]+") + "$");
                         if (rx.test(idPath) && paths[k]?.[idMethod]) { docKey = k; break; }
                     }
                 }
-                if (!docKey) return;
+                if (!docKey) {
+                    if (!cancelled) { setAutoCols(columns ?? null); setPrimaryKey("id"); }
+                    return;
+                }
 
-                // 200 JSON schema for GET-by-id
                 const raw = getResponseSchema(spec, docKey, idMethod);
-                if (!raw) return;
+                if (!raw) {
+                    if (!cancelled) { setAutoCols(columns ?? null); setPrimaryKey("id"); }
+                    return;
+                }
 
-                // If it's Page<T> or array, drill to row schema
                 const rowSchema = drillRowSchema(raw, spec);
 
-                const inferred = inferColumnsFromSchema(rowSchema, {
-                    max: Infinity,     // allow as many columns as exist → table can overflow
-                    showCoords: true,  // include coords, rank will push them to the end
-                });
-                setAutoCols(inferred);
-                if (!cancelled) setAutoCols(inferred);
+                const pkFromSchema = inferPkFromSchema(rowSchema);
+                const pkFromPath   = inferPkFromPathParam(docKey);
+                const pk = pkFromSchema ?? pkFromPath ?? "id";
+                if (!cancelled) setPrimaryKey(pk);
+
+                if (columns && columns.length) {
+                    if (!cancelled) setAutoCols(null);
+                } else {
+                    const inferred = inferColumnsFromSchema(rowSchema, pk, {
+                        max: Infinity,
+                        showCoords: true,
+                    });
+                    if (!cancelled) setAutoCols(inferred);
+                }
             } catch {
-                // ignore; we'll just render no auto columns
+                if (!cancelled) { setAutoCols(columns ?? null); setPrimaryKey("id"); }
             }
         })();
         return () => { cancelled = true; };
     }, [idPath, idMethod, columns]);
 
-    // -------- data fetching --------
+    // ---- data fetching ----
     const fetchList = React.useCallback(async (p: number) => {
         setLoading(true); setErr("");
         const qs = new URLSearchParams();
-
-        // If your backend is 0-based (Spring Pageable): use p-1. If it's 1-based already, keep p.
         qs.set("page", String(Math.max(0, p)));
         qs.set("size", String(pageSize));
+        appendTo(qs);
 
-        appendTo(qs); // ← add active filters from the OpenAPI params
-        const url = `${BASE}${listPath}?${qs.toString()}`
+        const url = `${BASE}${listPath}?${qs.toString()}`;
         try {
             const res = await fetch(url, { headers: { Accept: "application/json" } });
             if (!res.ok) throw new Error(await res.text());
             const json = await res.json();
             const items = Array.isArray(json) ? json : (json.items ?? []);
-
             const totRaw = Array.isArray(json) ? items.length : json.total;
             const sizeRaw = Array.isArray(json) ? pageSize : json.size;
 
@@ -147,26 +156,59 @@ export default function FetchCard({
         } finally { setLoading(false); }
     }, [idPath]);
 
+    // guess pk from an actual row (fallback if inference missed)
+    const guessPkFromRow = React.useCallback((row: any): string | null => {
+        if (!row || typeof row !== "object") return null;
+        const keys = Object.keys(row);
+        const norm = (s: string) => normKey(s).toLowerCase();
+
+        // prefer exact primaryKey if present
+        if (keys.some(k => norm(k) === norm(primaryKey))) return primaryKey;
+
+        // id-like patterns
+        const idish = keys.find(isIdLike);
+        if (idish) return idish;
+
+        // literal id
+        const plain = keys.find(k => /^id$/i.test(k));
+        if (plain) return plain;
+
+        return null;
+    }, [primaryKey]);
+
+    const handlePick = React.useCallback((row: any) => {
+        if (!onPick) return;
+        const pkName = guessPkFromRow(row) ?? primaryKey ?? "id";
+        const idVal = row?.[pkName];
+        // Alias to id so downstream edit forms that expect 'id' continue to work.
+        const payload = { ...row, id: idVal, __pkName: pkName };
+        onPick(payload);
+    }, [onPick, guessPkFromRow, primaryKey]);
+
     const doDelete = React.useCallback(async (row: any) => {
-        if (!deletePath || !row?.id) return;
-        if (!confirm(`Delete ${row.id}?`)) return;
+        if (!deletePath) return;
+        // use the best-known pk from this row
+        const pkName = guessPkFromRow(row) ?? primaryKey ?? "id";
+        const rid = row?.[pkName];
+        if (rid == null) return;
+        if (!confirm(`Delete ${rid}?`)) return;
         setLoading(true); setErr("");
         try {
-            const url = BASE + deletePath.replace(/\{[^}]+\}/, encodeURIComponent(String(row.id)));
+            const url = BASE + deletePath.replace(/\{[^}]+\}/, encodeURIComponent(String(rid)));
             const res = await fetch(url, { method: "DELETE" });
             if (!res.ok) throw new Error(await res.text());
-            if (!id.trim()) await fetchList(page);
-            else { setRows([]); setTotal(0); setId(""); await fetchList(1); }
+            if (!idInput.trim()) await fetchList(page);
+            else { setRows([]); setTotal(0); setIdInput(""); await fetchList(1); }
         } catch (e: any) {
             setErr(e.message || String(e));
         } finally { setLoading(false); }
-    }, [deletePath, id, fetchList, page]);
+    }, [deletePath, idInput, fetchList, page, guessPkFromRow, primaryKey]);
 
-    React.useEffect(() => { if (!id) fetchList(1); }, [id, fetchList]);
+    React.useEffect(() => { if (!idInput) fetchList(1); }, [idInput, fetchList]);
 
     const onSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        const trimmed = id.trim();
+        const trimmed = idInput.trim();
         if (trimmed) fetchOne(trimmed);
         else fetchList(1);
     };
@@ -175,24 +217,24 @@ export default function FetchCard({
     const baseCols = React.useMemo<Column[]>(() => columns && columns.length ? columns : (autoCols ?? []), [columns, autoCols]);
 
     const liveCols = React.useMemo<Column[]>(() => {
-        if (!deletePath && !onPick) return baseCols;
+        if (!onPick && !deletePath) return baseCols;
         return [
             ...baseCols,
             {
                 header: "Actions",
                 render: (r: any) => (
                     <div style={{ display: "flex", gap: 6 }}>
-                        {onPick && <button onClick={() => onPick(r)}>Edit</button>}
-                        {deletePath && <button onClick={() => doDelete(r)}>Delete</button>}
+                        {onPick && <button onClick={(e) => { e.stopPropagation(); handlePick(r); }}>Edit</button>}
+                        {deletePath && <button onClick={(e) => { e.stopPropagation(); doDelete(r); }}>Delete</button>}
                     </div>
                 ),
             },
         ];
-    }, [baseCols, deletePath, onPick, doDelete]);
+    }, [baseCols, onPick, deletePath, handlePick, doDelete]);
 
-    const effSize = serverSize ?? pageSize;                  // prefer server's size if it echoes one
+    const effSize = serverSize ?? pageSize;
     const totalPages = Math.max(1, Math.ceil(total / effSize));
-    const isListMode = !id || id.trim() === "";              // robust empty-id check
+    const isListMode = !idInput || idInput.trim() === "";
     const showPager = isListMode && totalPages > 1;
 
     return (
@@ -201,8 +243,12 @@ export default function FetchCard({
 
             <form onSubmit={onSubmit} style={{ display: "grid", gap: 8 }}>
                 <label style={{ display: "grid", gap: 4 }}>
-                    <span style={{ opacity: 0.8 }}>id (optional)</span>
-                    <input value={id} onChange={(e) => setId(e.target.value)} placeholder="leave blank to list" />
+                    <span style={{ opacity: 0.8 }}>{primaryKey} (optional)</span>
+                    <input
+                        value={idInput}
+                        onChange={(e) => setIdInput(e.target.value)}
+                        placeholder={`leave blank to list; provide ${primaryKey} to fetch one`}
+                    />
                 </label>
                 <div><button type="submit" disabled={loading}>{loading ? "Loading…" : "Fetch"}</button></div>
             </form>
@@ -240,10 +286,16 @@ export default function FetchCard({
                     </thead>
                     <tbody>
                     {rows.map((r, i) => (
-                        <tr key={i} style={{ borderTop: "1px solid #222", cursor: onPick ? "pointer" : "default" }}
-                            onClick={() => onPick?.(r)}>
+                        <tr
+                            key={i}
+                            role={onPick ? "button" : undefined}
+                            tabIndex={onPick ? 0 : -1}
+                            style={{ borderTop: "1px solid #222", cursor: onPick ? "pointer" : "default" }}
+                            onClick={() => onPick && handlePick(r)}
+                            onKeyDown={(e) => { if (onPick && (e.key === "Enter" || e.key === " ")) handlePick(r); }}
+                        >
                             {liveCols.map((c, j) => (
-                                <td key={j} style={{padding: "6px 8px", whiteSpace: "nowrap"}}>
+                                <td key={j} style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
                                     {c.render(r)}
                                 </td>
                             ))}
@@ -283,17 +335,14 @@ export default function FetchCard({
     );
 }
 
-/** ---- helpers to drill row schema & infer columns ---- */
+/** ---- helpers to drill row schema & infer columns/primary key ---- */
 function drillRowSchema(schema: any, spec: any): any {
-    // If schema is Page<T>, find properties.items.items.$ref or similar
     if (schema?.properties?.items) {
         const items = schema.properties.items;
-        const inner = items.items ?? items; // array -> items; already an object -> itself
+        const inner = items.items ?? items;
         return deref(inner, spec);
     }
-    // If schema is array -> use its items
     if (schema?.type === "array" && schema.items) return deref(schema.items, spec);
-    // Otherwise expect an object row
     return schema;
 }
 
@@ -310,6 +359,9 @@ function deref(s: any, spec: any): any {
         for (const piece of s.allOf) {
             const d = deref(piece, spec);
             if (d?.properties) merged.properties = { ...(merged.properties ?? {}), ...d.properties };
+            if (Array.isArray(d?.required)) {
+                merged.required = Array.from(new Set([...(merged.required ?? []), ...d.required]));
+            }
         }
         return merged;
     }
@@ -329,7 +381,7 @@ function toArray(val: any): any[] {
             const parsed = JSON.parse(val);
             if (Array.isArray(parsed)) return parsed;
             if (parsed && typeof parsed === 'object') return [parsed];
-        } catch {/* ignore */}
+        } catch { /* ignore */ }
     }
     if (typeof val === 'object') return [val];
     return [val];
@@ -357,70 +409,92 @@ function formatCell(v: any) {
     return String(v);
 }
 
-// id, _id, row_id / row-id, and camelCase ...Id
-// const isIdLike = (raw: string) => {
-//     const k = raw.normalize('NFKC').trim().replace(/[‐-‒–—―⁃−]/g, '-'); // normalize dashes
-//     return (
-//         /^_?id$/i.test(k) ||          // id / _id
-//         /(?:^|[_-])id$/i.test(k) ||   // row_id / row-id / id
-//         /[A-Za-z0-9]Id$/.test(k)      // rowId / streetId
-//     );
-// };
-//
-// function inferPkFromSchema(rowSchema: any): string | null {
-//     const props = rowSchema?.properties ?? {};
-//     const keys = Object.keys(props);
-//     const required = Array.isArray(rowSchema?.required) ? rowSchema.required : [];
-//
-//     return (
-//         required.find(isIdLike) ||
-//         keys.find(isIdLike) ||
-//         null
-//     );
-// }
-//
-// function inferPkFromPaths(doc: any, basePath: string): string | null {
-//     for (const p of Object.keys(doc?.paths ?? {})) {
-//         if (!p.toLowerCase().startsWith(basePath.toLowerCase() + '/{')) continue;
-//         const m = p.match(/\{([^}]+)\}/);
-//         if (m?.[1]) return m[1]; // e.g., "row_id"
-//     }
-//     return null;
-// }
+/* ---------------- pk inference ---------------- */
 
-/** Build columns from object schema; force coords/time last; arrays as dropdowns. */
+const normDash = (s: string) => s.replace(/[‐‒–—―⁃−]/g, "-");
+const normKey = (raw: string) => normDash(String(raw ?? "")).normalize("NFKC").trim();
+
+/** Match id, _id, row_id, row-id, camel rowId/streetId, etc. */
+const isIdLike = (raw: string) => {
+    const k = normKey(raw);
+    return (
+        /^_?id$/i.test(k) ||        // id / _id
+        /(?:^|[_-])id$/i.test(k) || // row_id / row-id / ...-id / ..._id
+        /[A-Za-z0-9]Id$/.test(k)    // rowId / streetId
+    );
+};
+
+const isPrimitiveSchema = (p: any) => {
+    const t = p?.type;
+    return t === "string" || t === "integer" || t === "number" || t === "boolean";
+};
+
+function inferPkFromSchema(rowSchema: any): string | null {
+    const props: Record<string, any> = rowSchema?.properties ?? {};
+    const keys = Object.keys(props);
+    if (!keys.length) return null;
+
+    if (typeof rowSchema?.["x-primary-key"] === "string") {
+        const k = rowSchema["x-primary-key"];
+        if (props[k]) return k;
+    }
+
+    const required: string[] = Array.isArray(rowSchema?.required) ? rowSchema.required : [];
+
+    const reqId = required.find((k) => isIdLike(k) && isPrimitiveSchema(props[k]));
+    if (reqId) return reqId;
+
+    const idish = keys.find((k) => isIdLike(k) && isPrimitiveSchema(props[k]));
+    if (idish) return idish;
+
+    const litId = keys.find((k) => /^id$/i.test(k) && isPrimitiveSchema(props[k]));
+    if (litId) return litId;
+
+    const reqPrim = required.filter((k) => isPrimitiveSchema(props[k]));
+    if (reqPrim.length === 1) return reqPrim[0];
+
+    const firstPrim = keys.find((k) => isPrimitiveSchema(props[k]));
+    return firstPrim ?? null;
+}
+
+function inferPkFromPathParam(docKey: string): string | null {
+    const m = docKey.match(/\{([^}]+)\}/);
+    return m?.[1] ?? null;
+}
+
+/** Build columns from object schema; arrays as dropdowns; use pk for ranking/id styling. */
 function inferColumnsFromSchema(
     rowSchema: any,
+    pk: string,
     opts?: { max?: number; showCoords?: boolean }
 ): Column[] {
     const props: Record<string, any> = rowSchema?.properties ?? {};
     const keys = Object.keys(props);
     const maxCols = opts?.max ?? Infinity;
-    // const pk =
 
-    const isIdLike    = (k: string) => /(^|_)id$/i.test(k);
-    const isPrimaryId = (k: string) => k.toLowerCase() === 'id';
-    const isName      = (k: string) => /(^|_)name$/i.test(k);
-    const isZip       = (k: string) => /(zip|code)$/i.test(k);
-    const isType      = (k: string) => /(roadType|signType|intersectionType|type)$/i.test(k);
-    const isCoord     = (k: string) => /^(lat|latitude|lon|lng|longitude|altitude)$/i.test(k);
-    const isTimeLike  = (k: string) => /(timestamp|created|updated|.*At|time)$/i.test(k);
+    const isPk         = (k: string) => normKey(k).toLowerCase() === normKey(pk).toLowerCase();
+    const isIdish      = (k: string) => isIdLike(k);
+    const isName       = (k: string) => /(^|[_-])name$/i.test(k);
+    const isZip        = (k: string) => /(zip|code)$/i.test(k);
+    const isType       = (k: string) => /(roadType|signType|intersectionType|(^|[_-])type$)/i.test(k);
+    const isCoord      = (k: string) => /^(lat|latitude|lon|lng|longitude|altitude)$/i.test(k);
+    const isTimeLike   = (k: string) => /(timestamp|created|updated|.*At|time)$/i.test(k);
 
-    // smaller rank = earlier column
     const rank = (k: string) =>
-        isPrimaryId(k) ? 0
-            : isName(k)      ? 1
-                : (isIdLike(k) && !isPrimaryId(k)) ? 2 // e.g., streetId
-                    : isZip(k)       ? 3
-                        : isType(k)      ? 4
-                            : isTimeLike(k)  ? 98
-                                : isCoord(k)     ? 99
+        isPk(k)         ? 0
+            : isName(k)     ? 1
+                : (isIdish(k) && !isPk(k)) ? 2
+                    : isZip(k)      ? 3
+                        : isType(k)     ? 4
+                            : isTimeLike(k) ? 98
+                                : isCoord(k)    ? 99
                                     : 50;
+
     const selectedKeys = keys
         .filter(k => {
             const t = props[k]?.type;
             if (t === 'object') return false;
-            if (!opts?.showCoords && isCoord(k)) return false; // hide coords unless requested
+            if (!opts?.showCoords && isCoord(k)) return false;
             return true;
         })
         .sort((a, b) => {
@@ -430,10 +504,8 @@ function inferColumnsFromSchema(
         .slice(0, maxCols);
 
     return selectedKeys.map<Column>(k => {
-        const header = k;                     // <-- use the field name only
-        const idCell = /(^|_)id$/i.test(k);
+        const header = k;
 
-        // Nice labels for "segments"
         if (k === 'segments') {
             return {
                 header,
@@ -448,7 +520,6 @@ function inferColumnsFromSchema(
                     return (
                         <select
                             className="cell-select"
-                            // NOTE: not disabled ⇒ you can open it
                             onClick={(e) => e.stopPropagation()}
                             onMouseDown={(e) => e.stopPropagation()}
                             title={`${arr.length} segment(s)`}
@@ -464,13 +535,12 @@ function inferColumnsFromSchema(
             };
         }
 
-        // Generic: arrays -> dropdown (openable), primitives -> text
         return {
             header,
             tdClassName: 'cell-list',
             title: (r) => {
                 const arr = toArray(r?.[k]);
-                return arr.length ? `${arr.length} item(s)` : undefined;
+                return arr.length > 1 ? `${arr.length} item(s)` : undefined;
             },
             render: (r) => {
                 const raw = r?.[k];
@@ -495,11 +565,11 @@ function inferColumnsFromSchema(
 
                 return (
                     <span
-                        className={idCell ? 'cell-id' : undefined}
-                        title={idCell && raw != null ? String(raw) : undefined}
+                        className={isPk(k) ? 'cell-id' : undefined}
+                        title={isPk(k) && raw != null ? String(raw) : undefined}
                     >
-          {formatCell(raw)}
-        </span>
+            {formatCell(raw)}
+          </span>
                 );
             },
         };
