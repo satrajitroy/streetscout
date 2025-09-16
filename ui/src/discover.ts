@@ -10,6 +10,9 @@ export type Paths = {
     deletePath?: string;  // DELETE .../{id} (suffix allowed)
 };
 
+/** Query parameter description (used to render column filters) */
+export type QueryDef = { name: string; required: boolean; explode: boolean; schema?: any };
+
 /** Resource description returned to the UI */
 export type ResourceDef = {
     name: string;   // e.g. "street", "sign", "xsection", "tasks"
@@ -22,6 +25,8 @@ export type ResourceDef = {
         edit?: any;
         delete?: any;
     };
+    /** Discovered query params for the list operation (if any) */
+    queryDefs?: QueryDef[];
 };
 
 /** Kept for your imports in App.tsx, even if you don't use it here */
@@ -101,6 +106,48 @@ function looksApiLike(r: ResourceDef): boolean {
     return ok && notJunkName;
 }
 
+/* -------------------- robust param reading (path-level + $ref + content.*.schema) -------------------- */
+
+function deref<T = any>(spec: any, node: any): T {
+    if (!node || !node.$ref) return node as T;
+    const path = node.$ref.replace(/^#\//, "").split("/");
+    return path.reduce((acc: any, k: any) => (acc ? acc[k] : undefined), spec) as T;
+}
+
+function paramSchema(spec: any, p: any) {
+    if (p?.schema) return deref(spec, p.schema);
+    const c = p?.content && typeof p.content === "object" ? p.content : undefined;
+    if (!c) return undefined;
+    const mt =
+        c["application/json"] ??
+        c["application/x-www-form-urlencoded"] ??
+        c["*/*"] ??
+        c[Object.keys(c)[0]];
+    return mt?.schema ? deref(spec, mt.schema) : undefined;
+}
+
+export function readQueryDefs(spec: any, pathItem: any, op: any): QueryDef[] {
+    const pathParams = Array.isArray(pathItem?.parameters) ? pathItem.parameters : [];
+    const opParams = Array.isArray(op?.parameters) ? op.parameters : [];
+    const merged = [...pathParams, ...opParams]; // op-level overrides duplicates later via "seen" set
+
+    const seen = new Set<string>();
+    const out: QueryDef[] = [];
+    for (const raw of merged) {
+        const p = deref<any>(spec, raw);
+        if (!p || p.in !== "query" || !p.name) continue;
+        if (seen.has(p.name)) continue;
+        seen.add(p.name);
+        out.push({
+            name: String(p.name),
+            required: !!p.required,
+            explode: !!p.explode,
+            schema: paramSchema(spec, p),
+        });
+    }
+    return out;
+}
+
 /**
  * Discover resources and CRUD endpoints from the OpenAPI spec.
  * @param prefix only consider paths under this URL prefix (e.g., "/api/streetscout" or "/api")
@@ -124,7 +171,8 @@ export async function discoverResources(prefix = ""): Promise<ResourceDef[]> {
             const resourceName = segs[resIdx];
             if (!resourceName || isParam(resourceName)) continue;
 
-            const res =
+            // upsert the resource bucket
+            let res =
                 byName.get(resourceName) ??
                 {
                     name: resourceName,
@@ -143,6 +191,13 @@ export async function discoverResources(prefix = ""): Promise<ResourceDef[]> {
                 } else {
                     res.paths.listPath = prefer(res.paths.listPath, path);
                     res.ops!.list = op;
+
+                    // compute queryDefs for the list operation (robust across path-level/$ref/content schemas)
+                    const pathItem = spec.paths?.[res.paths.listPath!];
+                    if (pathItem) {
+                        const listOp = pathItem?.get ?? pathItem?.post ?? pathItem?.put ?? pathItem?.delete;
+                        res.queryDefs = readQueryDefs(spec, pathItem, listOp);
+                    }
                 }
                 continue;
             }
@@ -171,7 +226,6 @@ export async function discoverResources(prefix = ""): Promise<ResourceDef[]> {
                     res.paths.deletePath = prefer(res.paths.deletePath, path);
                     res.ops!.delete = op;
                 }
-                continue;
             }
         }
     }

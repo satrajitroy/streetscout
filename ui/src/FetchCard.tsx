@@ -284,7 +284,6 @@ export default function FetchCard({
 }
 
 /** ---- helpers to drill row schema & infer columns ---- */
-
 function drillRowSchema(schema: any, spec: any): any {
     // If schema is Page<T>, find properties.items.items.$ref or similar
     if (schema?.properties?.items) {
@@ -358,6 +357,37 @@ function formatCell(v: any) {
     return String(v);
 }
 
+// id, _id, row_id / row-id, and camelCase ...Id
+// const isIdLike = (raw: string) => {
+//     const k = raw.normalize('NFKC').trim().replace(/[‐-‒–—―⁃−]/g, '-'); // normalize dashes
+//     return (
+//         /^_?id$/i.test(k) ||          // id / _id
+//         /(?:^|[_-])id$/i.test(k) ||   // row_id / row-id / id
+//         /[A-Za-z0-9]Id$/.test(k)      // rowId / streetId
+//     );
+// };
+//
+// function inferPkFromSchema(rowSchema: any): string | null {
+//     const props = rowSchema?.properties ?? {};
+//     const keys = Object.keys(props);
+//     const required = Array.isArray(rowSchema?.required) ? rowSchema.required : [];
+//
+//     return (
+//         required.find(isIdLike) ||
+//         keys.find(isIdLike) ||
+//         null
+//     );
+// }
+//
+// function inferPkFromPaths(doc: any, basePath: string): string | null {
+//     for (const p of Object.keys(doc?.paths ?? {})) {
+//         if (!p.toLowerCase().startsWith(basePath.toLowerCase() + '/{')) continue;
+//         const m = p.match(/\{([^}]+)\}/);
+//         if (m?.[1]) return m[1]; // e.g., "row_id"
+//     }
+//     return null;
+// }
+
 /** Build columns from object schema; force coords/time last; arrays as dropdowns. */
 function inferColumnsFromSchema(
     rowSchema: any,
@@ -366,6 +396,7 @@ function inferColumnsFromSchema(
     const props: Record<string, any> = rowSchema?.properties ?? {};
     const keys = Object.keys(props);
     const maxCols = opts?.max ?? Infinity;
+    // const pk =
 
     const isIdLike    = (k: string) => /(^|_)id$/i.test(k);
     const isPrimaryId = (k: string) => k.toLowerCase() === 'id';

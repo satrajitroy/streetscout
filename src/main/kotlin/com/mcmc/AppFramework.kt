@@ -1,8 +1,8 @@
 package com.mcmc
 
-import io.github.smiley4.ktoropenapi.OpenApi
-import io.github.smiley4.ktoropenapi.config.SchemaGenerator
-import io.github.smiley4.ktoropenapi.openApi
+import com.mcmc.dto.IntersectionView
+import com.mcmc.dto.StreetSignView
+import com.mcmc.dto.StreetView
 import io.github.smiley4.ktorswaggerui.swaggerUI
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
@@ -10,17 +10,16 @@ import io.ktor.server.application.*
 import io.ktor.server.engine.*
 import io.ktor.server.http.content.*
 import io.ktor.server.netty.*
-import io.ktor.server.plugins.calllogging.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
-import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.polymorphic
-import org.slf4j.event.Level
+import openapi.openApiForMany
+import openapi.resource
 
 
 lateinit var aggrService: Service
@@ -29,14 +28,6 @@ val requestStore = mutableMapOf<String, Entity>()
 val storeMutex = Mutex()
 
 fun Application.module() {
-  install(OpenApi) {
-    schemas {
-      generator = SchemaGenerator.kotlinx(
-        Json { ignoreUnknownKeys = true; explicitNulls = false; encodeDefaults = true }
-      )
-    }
-  }
-
   // install(CallLogging) { level = Level.INFO }
   // install(IgnoreTrailingSlash)
   //
@@ -79,10 +70,22 @@ fun Application.module() {
   }
 
   routing {
-    // enable routing trace (set up once at startup)
-    // trace { application.log.info(it.buildText()) }
+    val spec = openApiForMany(
+    resources = listOf(
+        resource<com.mcmc.dto.StreetView>("/streetscout/street", requiredCreate = listOf("name","zip")),
+        resource<com.mcmc.dto.StreetSignView>("/streetscout/sign", requiredCreate = listOf("streetId")),
+        resource<com.mcmc.dto.IntersectionView>("/streetscout/xsection", requiredCreate = listOf("streetId"))
+    ),
+      basePrefix = "/api",
+      title = "StreetScout API",
+      version = "1"
+    )
 
-    route("api.json") { openApi() }             // generated OpenAPI 3.1
+    routing {
+      get("/api.json") { call.respondText(spec, ContentType.Application.Json) }
+      get("/swagger") { swaggerUI("/api.json") }  // optional
+    }
+    route("api.json") {} // generated OpenAPI 3.1
     route("swagger") { swaggerUI("/api.json") } // Swagger UI
 
     route("/api/streetscout/street") { aggrService.streetDef(this@route) }
