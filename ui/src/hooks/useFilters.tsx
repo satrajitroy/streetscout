@@ -1,167 +1,239 @@
 // src/hooks/useFilters.tsx
 import * as React from "react";
 
-type Schemaish = {
-    type?: "string" | "number" | "integer" | "boolean" | "array" | "object";
-    format?: "date" | "date-time" | string;
-    enum?: any[];
-    default?: any;
-};
-
-export type QueryDef = {
+export type ParamDef = {
     name: string;
+    in: "query" | "path" | "header" | "cookie";
     required?: boolean;
-    schema?: Schemaish;
-    explode?: boolean;
+    schema?: any; // OpenAPI SchemaObject
+    description?: string;
 };
 
-function readQueryDefs(listOp: any): QueryDef[] {
-    const params: any[] = Array.isArray(listOp?.parameters) ? listOp.parameters : [];
-    return params
-        .filter(p => p?.in === "query")
-        .map((p): QueryDef => ({
-            name: String(p.name),
-            required: !!p.required,
-            schema: p.schema as Schemaish,
-            explode: !!p.explode,
+type HookResult = {
+    controls: React.ReactNode;
+    appendTo: (qs: URLSearchParams) => void;
+    reset: () => void;
+    hasFilters: boolean;
+};
+
+/** Normalize an OpenAPI param or a $ref'ed param to a plain ParamDef */
+function normalizeParam(x: any): ParamDef | null {
+    if (!x) return null;
+    // resolve $ref if the caller pre-deref'd, we just accept it as-is
+    const p = x.$ref ? (x.__resolved ?? null) : x;
+    if (!p) return null;
+    return {
+        name: String(p.name),
+        in: p.in,
+        required: !!p.required,
+        schema: p.schema ?? {},
+        description: p.description,
+    };
+}
+
+/** Try to grab the 200/OK application/json schema from an op */
+function get200SchemaFromOp(op: any): any | null {
+    const res = op?.responses?.["200"] ?? op?.responses?.["201"];
+    const content = res?.content ?? {};
+    const media = content["application/json"] ?? content["*/*"];
+    return media?.schema ?? null;
+}
+
+/** If schema is Page<T> or array<T>, return T (row schema) */
+function drillRowSchemaFromAny(schema: any): any {
+    if (!schema) return null;
+    const deref = (s: any): any => {
+        if (!s) return s;
+        if (s.$ref) {
+            // best-effort: some callers pre-deref; we just return as-is if $ref
+            return s;
+        }
+        if (Array.isArray(s.allOf)) {
+            // shallow merge properties
+            const merged: any = { ...s };
+            for (const piece of s.allOf) {
+                const d = deref(piece);
+                if (d?.properties) merged.properties = { ...(merged.properties ?? {}), ...d.properties };
+            }
+            return merged;
+        }
+        return s;
+    };
+
+    // Page<T>
+    if (schema?.properties?.items) {
+        const items = schema.properties.items;
+        const inner = items?.items ?? items;
+        return deref(inner);
+    }
+    // array<T>
+    if (schema?.type === "array" && schema.items) return deref(schema.items);
+
+    return deref(schema);
+}
+
+/** Extract filterable query params from a GET list operation, with fallbacks */
+function toParams(listOp: any): ParamDef[] {
+    const raw: any[] = Array.isArray(listOp?.parameters) ? (listOp.parameters as any[]) : [];
+
+    const fromParams: ParamDef[] = raw
+        .map((x: any) => normalizeParam(x))
+        .filter((x: ParamDef | null): x is ParamDef => !!x)
+        .filter((p: ParamDef) => p.in === "query")
+        // drop common non-data params
+        .filter((p: ParamDef) => !/^(page|size|sort)$/i.test(p.name));
+
+    if (fromParams.length > 0) {
+        // de-dupe by name (prefer the first)
+        const seen = new Set<string>();
+        return fromParams.filter((p: ParamDef) => (seen.has(p.name) ? false : (seen.add(p.name), true)));
+    }
+
+    // Fallback: infer from response schema (row properties)
+    const s = get200SchemaFromOp(listOp);
+    const row = drillRowSchemaFromAny(s);
+    const props: Record<string, any> = row?.properties ?? {};
+    const names = Object.keys(props);
+
+    return names
+        .filter((n) => !/^(page|size|sort)$/i.test(n))
+        .map((name) => ({
+            name,
+            in: "query" as const,
+            required: false,
+            schema: props[name] ?? {},
+            description: undefined,
         }));
 }
 
-export function useFilters(listOp?: any) {
-    const defs = React.useMemo<QueryDef[]>(() => readQueryDefs(listOp), [listOp]);
+function isEnumSchema(s: any): boolean {
+    return Array.isArray(s?.enum) && s.enum.length > 0;
+}
+function enumValues(s: any): string[] {
+    return Array.isArray(s?.enum) ? s.enum.map((v: any) => String(v)) : [];
+}
+function schemaType(s: any): string {
+    if (!s) return "string";
+    if (Array.isArray(s.type)) return s.type[0];
+    return s.type ?? "string";
+}
 
-    const [filters, setFilters] = React.useState<Record<string, unknown>>({});
+type Row = { key: string; val: string };
 
-    React.useEffect(() => {
-        const init: Record<string, unknown> = {};
-        for (const d of defs) {
-            const dflt = d.schema?.default;
-            if (dflt !== undefined) init[d.name] = dflt;
-        }
-        setFilters(init);
-    }, [defs]);
+export function useFilters(listOp: any): HookResult {
+    const params = React.useMemo<ParamDef[]>(() => toParams(listOp), [listOp]);
 
+    // filter rows the user is composing
+    const [rows, setRows] = React.useState<Row[]>([]);
+
+    // pick the first key as a default for new rows (if any)
+    const firstKey = params[0]?.name ?? "";
+
+    const addRow = React.useCallback(() => {
+        if (!params.length) return;
+        setRows((r) => [...r, { key: firstKey, val: "" }]);
+    }, [params, firstKey]);
+
+    const changeKey = React.useCallback((idx: number, key: string) => {
+        setRows((r) => {
+            const copy = r.slice();
+            copy[idx] = { key, val: "" };
+            return copy;
+        });
+    }, []);
+
+    const changeVal = React.useCallback((idx: number, val: string) => {
+        setRows((r) => {
+            const copy = r.slice();
+            copy[idx] = { ...copy[idx], val };
+            return copy;
+        });
+    }, []);
+
+    const removeRow = React.useCallback((idx: number) => {
+        setRows((r) => r.filter((_, i) => i !== idx));
+    }, []);
+
+    const reset = React.useCallback(() => setRows([]), []);
+
+    /** Append active filter rows to the querystring */
     const appendTo = React.useCallback((qs: URLSearchParams) => {
-        for (const d of defs) {
-            const val = filters[d.name];
-            if (val === undefined || val === "" || val === null) continue;
-            if (Array.isArray(val)) {
-                if (d.explode) val.forEach(v => qs.append(d.name, String(v)));
-                else qs.set(d.name, val.map(v => String(v)).join(","));
-            } else {
-                qs.set(d.name, String(val));
-            }
+        for (const row of rows) {
+            if (!row.key || row.val == null || row.val === "") continue;
+            qs.set(row.key, row.val);
         }
-    }, [defs, filters]);
+    }, [rows]);
 
-    const reset = React.useCallback(() => setFilters({}), []);
-
+    /** Build the UI */
     const controls = React.useMemo<React.ReactNode>(() => {
-        if (!defs.length) return null;
-        return (
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                <strong>Filters:</strong>
-                {defs.map((d: QueryDef) => {
-                    const s = d.schema ?? {};
-                    const v = (filters[d.name] ?? "") as unknown;
+        if (!params.length && rows.length === 0) {
+            // nothing to show yet, but keep space stable
+            return <div style={{ opacity: 0.7 }}>No filterable columns.</div>;
+        }
 
-                    // enum → dropdown
-                    if (Array.isArray(s.enum) && s.enum.length > 0) {
-                        return (
-                            <label key={d.name} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                                {d.name}
+        // map of name -> schema for quick lookup when rendering value control
+        const byName = new Map<string, ParamDef>(params.map((p) => [p.name, p]));
+
+        return (
+            <div style={{ display: "grid", gap: 8 }}>
+                {rows.map((row, i) => {
+                    const p = byName.get(row.key) || params[0];
+                    const s = p?.schema ?? {};
+                    const showEnum = isEnumSchema(s);
+                    const label = p?.name ?? row.key;
+
+                    return (
+                        <div key={i} style={{ display: "grid", gridTemplateColumns: "minmax(160px, 240px) 1fr auto", gap: 8, alignItems: "center" }}>
+                            {/* Column selector */}
+                            <select
+                                value={row.key}
+                                onChange={(e) => changeKey(i, e.target.value)}
+                                title={p?.description || label}
+                            >
+                                {params.map((pp) => (
+                                    <option key={pp.name} value={pp.name}>{pp.name}</option>
+                                ))}
+                            </select>
+
+                            {/* Value control */}
+                            {showEnum ? (
                                 <select
-                                    value={typeof v === "string" ? v : ""}
-                                    onChange={e => setFilters(f => ({ ...f, [d.name]: e.target.value || undefined }))}
+                                    value={row.val}
+                                    onChange={(e) => changeVal(i, e.target.value)}
                                 >
-                                    <option value="">{d.required ? "(choose)" : "(any)"}</option>
-                                    {s.enum.map((opt: any) => (
-                                        <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
+                                    <option value="">(any)</option>
+                                    {enumValues(s).map((ev) => (
+                                        <option key={ev} value={ev}>{ev}</option>
                                     ))}
                                 </select>
-                            </label>
-                        );
-                    }
-
-                    // date / datetime
-                    if (s.type === "string" && s.format === "date") {
-                        return (
-                            <label key={d.name} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                                {d.name}
+                            ) : (
                                 <input
-                                    type="date"
-                                    value={typeof v === "string" ? v : ""}
-                                    onChange={e => setFilters(f => ({ ...f, [d.name]: e.target.value || undefined }))}
+                                    placeholder={schemaType(s)}
+                                    value={row.val}
+                                    onChange={(e) => changeVal(i, e.target.value)}
                                 />
-                            </label>
-                        );
-                    }
-                    if (s.type === "string" && s.format === "date-time") {
-                        return (
-                            <label key={d.name} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                                {d.name}
-                                <input
-                                    type="datetime-local"
-                                    value={typeof v === "string" ? v : ""}
-                                    onChange={e => setFilters(f => ({ ...f, [d.name]: e.target.value || undefined }))}
-                                />
-                            </label>
-                        );
-                    }
+                            )}
 
-                    // boolean
-                    if (s.type === "boolean") {
-                        const val = v === true ? "true" : v === false ? "false" : "";
-                        return (
-                            <label key={d.name} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                                {d.name}
-                                <select
-                                    value={val}
-                                    onChange={e => {
-                                        const next = e.target.value;
-                                        setFilters(f => ({ ...f, [d.name]: next === "" ? undefined : next === "true" }));
-                                    }}
-                                >
-                                    <option value="">{d.required ? "(choose)" : "(any)"}</option>
-                                    <option value="true">true</option>
-                                    <option value="false">false</option>
-                                </select>
-                            </label>
-                        );
-                    }
-
-                    // number / integer
-                    if (s.type === "number" || s.type === "integer") {
-                        return (
-                            <label key={d.name} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                                {d.name}
-                                <input
-                                    type="number"
-                                    value={typeof v === "number" || typeof v === "string" ? String(v) : ""}
-                                    onChange={e => {
-                                        const t = e.target.value;
-                                        setFilters(f => ({ ...f, [d.name]: t === "" ? undefined : Number(t) }));
-                                    }}
-                                />
-                            </label>
-                        );
-                    }
-
-                    // default text
-                    return (
-                        <label key={d.name} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                            {d.name}
-                            <input
-                                type="text"
-                                value={typeof v === "string" ? v : ""}
-                                onChange={e => setFilters(f => ({ ...f, [d.name]: e.target.value || undefined }))}
-                            />
-                        </label>
+                            <button type="button" onClick={() => removeRow(i)} aria-label="Remove filter">✕</button>
+                        </div>
                     );
                 })}
+
+                <div>
+                    <button type="button" onClick={addRow} disabled={!params.length}>+ Add filter</button>
+                    {rows.length > 0 && (
+                        <button type="button" onClick={reset} style={{ marginLeft: 8, opacity: 0.85 }}>
+                            Clear
+                        </button>
+                    )}
+                </div>
             </div>
         );
-    }, [defs, filters]);
+    }, [params, rows, changeKey, changeVal, removeRow, addRow, reset]);
 
-    return { controls, appendTo, reset, hasFilters: defs.length > 0 };
+    const hasFilters = (params.length > 0) || (rows.length > 0);
+
+    return { controls, appendTo, reset, hasFilters };
 }
+
+export default useFilters;
