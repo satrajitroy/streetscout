@@ -113,6 +113,10 @@
             </configuration>
           </execution>
         </executions>
+        <configuration>
+          <workingDirectory>ui</workingDirectory>
+          <installDirectory>${project.build.directory}/node</installDirectory>
+        </configuration>
       </plugin>
       <plugin>
         <artifactId>maven-resources-plugin</artifactId>
