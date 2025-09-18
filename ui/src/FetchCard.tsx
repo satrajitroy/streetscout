@@ -114,31 +114,78 @@ export default function FetchCard({
     }, [idPath, idMethod, columns]);
 
     // ---- data fetching ----
-    const fetchList = React.useCallback(async (p: number) => {
+    function isZeroBased(listOp: any): boolean {
+        const params: any[] = Array.isArray(listOp?.parameters) ? listOp.parameters : [];
+        const p = params.find((pp) => (pp?.name ?? "").toLowerCase() === "page");
+        const s = p?.schema ?? {};
+        return s.minimum === 0 || s.default === 0; // common Spring convention
+    }
+
+    const fetchList = React.useCallback(async (uiPageRequested: number) => {
         setLoading(true); setErr("");
+
+        // Step A: collect filter rows into a temporary qs, so we can see if user set page/size there
+        const tmp = new URLSearchParams();
+        appendTo(tmp); // DO NOT send this directly; just read and recompose
+
+        // Parse optional overrides from filters
+        const rawFilterPage = tmp.get("page");
+        const rawFilterSize = tmp.get("size");
+
+        // Sanitize numbers
+        const parsedFilterPage = rawFilterPage != null && rawFilterPage !== "" ? Number(rawFilterPage) : NaN;
+        const parsedFilterSize = rawFilterSize != null && rawFilterSize !== "" ? Number(rawFilterSize) : NaN;
+
+        // UI page (1-based) – prefer user filter override if provided
+        let uiPage: number;
+        if (!Number.isNaN(parsedFilterPage)) {
+            // Convert *backend* value to UI value if backend is 0-based
+            uiPage = isZeroBased(listOp) ? Math.max(1, parsedFilterPage + 1) : Math.max(1, parsedFilterPage);
+        } else {
+            uiPage = Math.max(1, uiPageRequested);
+        }
+
+        // Page size – prefer user filter override if provided
+        const effPageSize = !Number.isNaN(parsedFilterSize) && parsedFilterSize >= 1 ? parsedFilterSize : pageSize;
+
+        // Step B: build the actual qs to send
         const qs = new URLSearchParams();
-        qs.set("page", String(Math.max(0, p)));
-        qs.set("size", String(pageSize));
-        appendTo(qs);
+
+        // Copy all filters EXCEPT page/size (we’ll re-add normalized values below)
+        tmp.forEach((v, k) => {
+            const kl = k.toLowerCase();
+            if (kl !== "page" && kl !== "size") qs.set(k, v);
+        });
+
+        // Translate UI(1-based) -> backend page index
+        const zeroBased = isZeroBased(listOp);
+        const backendPage = zeroBased ? Math.max(0, uiPage - 1) : Math.max(1, uiPage);
+
+        qs.set("page", String(backendPage));
+        qs.set("size", String(effPageSize));
 
         const url = `${BASE}${listPath}?${qs.toString()}`;
+
         try {
             const res = await fetch(url, { headers: { Accept: "application/json" } });
             if (!res.ok) throw new Error(await res.text());
             const json = await res.json();
+
             const items = Array.isArray(json) ? json : (json.items ?? []);
             const totRaw = Array.isArray(json) ? items.length : json.total;
-            const sizeRaw = Array.isArray(json) ? pageSize : json.size;
+            const sizeRaw = Array.isArray(json) ? effPageSize : json.size;
 
             setRows(items);
             setTotal(typeof totRaw === "number" ? totRaw : items.length);
             setServerSize(typeof sizeRaw === "number" ? sizeRaw : undefined);
-            setPage(p);
+            setPage(uiPage); // store UI page (always 1-based in state)
         } catch (e: any) {
             setErr(e.message || String(e));
             setRows([]); setTotal(0);
-        } finally { setLoading(false); }
-    }, [listPath, pageSize, appendTo]);
+        } finally {
+            setLoading(false);
+        }
+    }, [listPath, pageSize, appendTo, listOp]);
 
     const fetchOne = React.useCallback(async (theId: string) => {
         setLoading(true); setErr("");
@@ -324,8 +371,8 @@ export default function FetchCard({
                         Page {page} / {totalPages} · Total {total}
                     </div>
                     <div style={{ display: "flex", gap: 6 }}>
-                        <button type="button" onClick={() => fetchList(0)} disabled={page <= 0}>Top</button>
-                        <button type="button" onClick={() => fetchList(Math.max(0, page - 1))} disabled={page <= 0}>Prev</button>
+                        <button type="button" onClick={() => fetchList(1)} disabled={page <= 1}>Top</button>
+                        <button type="button" onClick={() => fetchList(Math.max(1, page-1))} disabled={page <= 1}>Prev</button>
                         <button type="button" onClick={() => fetchList(page + 1)} disabled={page >= totalPages}>Next</button>
                         <button type="button" onClick={() => fetchList(totalPages)} disabled={page >= totalPages}>Bottom</button>
                     </div>
